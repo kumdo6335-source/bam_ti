@@ -1,3 +1,12 @@
+/**
+ * [보안 점검용 주석]
+ * 1. 프론트엔드에 API 키를 넣으면 개발자 도구에서 노출될 수 있다.
+ * 2. Gemini API 호출은 Vercel Serverless Function에서 처리한다.
+ * 3. .env 파일은 GitHub에 올리지 않는다.
+ * 4. Vercel 배포 시에는 Project Settings의 Environment Variables에 GEMINI_API_KEY를 등록해야 한다.
+ * 5. Gemini로 전송하는 데이터는 이름, 학번, 사진 경로를 제외한 최소 정보로 제한한다.
+ */
+
 const USERS = [
   { id: "admin", password: "2026", role: "admin", name: "관리자" },
   { id: "10101", password: "1234", role: "student", studentId: "10101" },
@@ -161,6 +170,20 @@ function renderAdminDashboard() {
     <section class="admin-grid" aria-label="전체 학생 정보">
       ${STUDENTS.map(renderStudentCard).join("")}
     </section>
+
+    <section class="counseling-panel" aria-labelledby="counselingTitle">
+      <div class="view-header" style="margin-top:28px;">
+        <div class="view-title">
+          <h2 id="counselingTitle" style="font-size:24px;">AI 학생 상담 전략 도우미</h2>
+        </div>
+      </div>
+      <div id="counselingContent" class="counseling-content">
+        <p>학생 카드의 "상담 전략 요청" 버튼을 눌러주세요.</p>
+      </div>
+      <p style="margin-top: 14px; font-weight: 800; color: var(--danger);">
+        ※ AI 상담 전략은 참고용입니다. 최종 판단과 실제 상담은 교사가 학생의 상황을 종합적으로 고려하여 진행해야 합니다.
+      </p>
+    </section>
   `;
 
   showOnly(adminView);
@@ -176,6 +199,7 @@ function renderStudentCard(student) {
         <p class="student-number">학번 ${student.id}</p>
         ${renderGrades(student.grades, true, `gradesTitle-${student.id}`)}
         ${renderTraits(student)}
+        <button class="primary-button request-strategy-btn" style="width: 100%; margin-top: 18px;" data-id="${student.id}">상담 전략 요청</button>
       </div>
     </article>
   `;
@@ -213,3 +237,112 @@ function renderTraits(student) {
 }
 
 showOnly(loginView);
+
+adminView.addEventListener("click", async (e) => {
+  if (e.target.classList.contains("request-strategy-btn")) {
+    const studentId = e.target.dataset.id;
+    const student = STUDENTS.find((s) => s.id === studentId);
+    if (student) {
+      renderCounselingPanel(student);
+      document.querySelector("#counselingTitle").scrollIntoView({ behavior: "smooth" });
+    }
+  }
+
+  if (e.target.id === "getStrategyBtn") {
+    await fetchCounselingStrategy();
+  }
+});
+
+let selectedCounselingStudent = null;
+
+function renderCounselingPanel(student) {
+  selectedCounselingStudent = student;
+  const counselingContent = document.querySelector("#counselingContent");
+  if (!counselingContent) return;
+
+  const studentAlias = "학생 " + String.fromCharCode(65 + STUDENTS.findIndex(s => s.id === student.id));
+  const gradeSummary = Object.entries(student.grades).map(([k, v]) => `${k}: ${v}`).join(", ");
+  const learningTraits = student.traits.join(" ") + " " + student.teacherMemo;
+
+  counselingContent.innerHTML = `
+    <div style="margin-bottom: 14px; padding: 14px; border: 2px dashed var(--primary); background: #fdfdfd;">
+      <strong>선택된 학생 (화면용):</strong> ${student.name} (${student.id})
+    </div>
+    <div style="margin-bottom: 14px;">
+      <label for="teacherConcern" style="display:block; font-weight:900; margin-bottom:8px;">교사 고민 입력</label>
+      <textarea id="teacherConcern" rows="3" style="width: 100%; padding: 10px; border: 2px solid #ccc; font-family: inherit;" placeholder="예: 수업 참여는 좋은데 평가 결과가 낮습니다. 어떻게 상담하면 좋을까요?"></textarea>
+    </div>
+    <div style="margin-bottom: 14px;">
+      <strong>전송 데이터 미리보기 (익명화됨):</strong>
+      <pre id="dataPreview" style="background: #eee; padding: 10px; overflow-x: auto; font-size: 13px; border: 1px solid #ccc; margin-top: 8px;">{
+  "studentAlias": "${studentAlias}",
+  "gradeSummary": "${gradeSummary}",
+  "learningTraits": "${learningTraits}",
+  "teacherConcern": ""
+}</pre>
+    </div>
+    <div id="counselingError" class="form-message" style="margin-bottom: 10px;"></div>
+    <button id="getStrategyBtn" class="primary-button" style="margin-bottom: 14px;">AI 상담 전략 받기</button>
+    <div id="aiResponseArea" style="padding: 18px; border: 2px solid var(--primary); background: #fff; line-height: 1.6;" class="hidden"></div>
+  `;
+
+  const concernInput = document.querySelector("#teacherConcern");
+  const dataPreview = document.querySelector("#dataPreview");
+  concernInput.addEventListener("input", (e) => {
+    dataPreview.textContent = JSON.stringify({
+      studentAlias,
+      gradeSummary,
+      learningTraits,
+      teacherConcern: e.target.value
+    }, null, 2);
+  });
+}
+
+async function fetchCounselingStrategy() {
+  const concernInput = document.querySelector("#teacherConcern");
+  const errorArea = document.querySelector("#counselingError");
+  const responseArea = document.querySelector("#aiResponseArea");
+  
+  if (!concernInput || !concernInput.value.trim()) {
+    errorArea.textContent = "상담 고민을 먼저 입력해주세요.";
+    return;
+  }
+  
+  errorArea.textContent = "";
+  responseArea.classList.remove("hidden");
+  responseArea.innerHTML = "<em>AI가 상담 전략을 생성하는 중입니다...</em>";
+  
+  const student = selectedCounselingStudent;
+  const studentAlias = "학생 " + String.fromCharCode(65 + STUDENTS.findIndex(s => s.id === student.id));
+  const gradeSummary = Object.entries(student.grades).map(([k, v]) => `${k}: ${v}`).join(", ");
+  const learningTraits = student.traits.join(" ") + " " + student.teacherMemo;
+
+  try {
+    const res = await fetch("/api/gemini-counseling", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        studentAlias,
+        gradeSummary,
+        learningTraits,
+        teacherConcern: concernInput.value.trim()
+      })
+    });
+    
+    const data = await res.json();
+    if (data.success) {
+      // Markdown-like bold formatting and line breaks
+      const htmlText = data.result
+        .replace(/\\*\\*(.*?)\\*\\*/g, '<strong>$1</strong>')
+        .replace(/\\n/g, "<br/>");
+      responseArea.innerHTML = htmlText;
+    } else {
+      throw new Error(data.error);
+    }
+  } catch (err) {
+    responseArea.classList.add("hidden");
+    errorArea.textContent = "AI 상담 전략을 불러오지 못했습니다. API 키 또는 Vercel 환경 변수를 확인해주세요.";
+    console.error(err);
+  }
+}
+
